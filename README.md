@@ -178,6 +178,27 @@ To include some fancy Ajax stuff with jquery
 
 ```
 
+## More options
+
+```
+require 'shrimp'
+url     = 'http://www.google.com'
+options = { 
+  :margin => "1cm",
+  :header_content => 'header, page: {{current_page}}/{{total_pages}}',
+  :header_size => '1cm',
+  :footer_content => 'footer, <b>page: {{current_page}}/{{total_pages}}</b>',
+  :footer_size => '1cm'
+}
+Shrimp::Phantom.new(url, options).to_pdf("~/output.pdf")
+header_content or footer_content value can be a file :
+
+options = { 
+  :header_content => File.open('header_file', 'r'),
+  :footer_content => File.open('footer_file', 'r')
+}
+```
+
 ## Contributing
 
 1. Fork it
