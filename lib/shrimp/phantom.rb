@@ -26,30 +26,45 @@ module Shrimp
   class Phantom
     attr_accessor :source, :configuration, :outfile
     attr_reader :options, :cookies, :result, :error
-    SCRIPT_FILE = File.expand_path('../rasterize.js', __FILE__)
+    SCRIPT_FILE = File.expand_path('../rasterize-server.js', __FILE__)
+
+    def self.restart_phantom
+      if @pid
+        Process.kill('SIGTERM', @pid) rescue Errno::ESRCH
+        @pid = nil
+      end
+      puts "executing phantomjs --config=#{Shrimp.configuration.default_options[:command_config_file]} #{Shrimp::Phantom::SCRIPT_FILE}"
+      @pid = Process.spawn("phantomjs --config=#{Shrimp.configuration.default_options[:command_config_file]} #{Shrimp::Phantom::SCRIPT_FILE}")
+      sleep(1)
+    end
 
     # Public: Runs the phantomjs binary
     #
     # Returns the stdout output of phantomjs
     def run
-      @error  = nil
-      @result = `#{cmd}`
-      unless $?.exitstatus == 0
-        @error  = @result
-        @result = nil
+      retrys = 0
+      # self.class.start_phantom
+      uri = URI(cmd)
+      http = Net::HTTP.new(uri.host, uri.port)
+      http.read_timeout = 5
+      begin
+        http.get(uri.request_uri)
+      rescue Timeout::Error, Errno::EINVAL, Errno::ECONNRESET, EOFError, Errno::ECONNREFUSED => e
+
+        if retrys < 2
+          puts 'restarting shrimp server'
+          self.class.restart_phantom
+          retrys += 1
+          retry
+        else
+          raise e
+        end
       end
-      @result
+      true
     end
 
     def run!
-      @error  = nil
-      @result = `#{cmd}`
-      unless $?.exitstatus == 0
-        @error  = @result
-        @result = nil
-        raise RenderingError.new(@error)
-      end
-      @result
+      run
     end
 
     # Public: Returns the phantom rasterize command
@@ -87,6 +102,25 @@ module Shrimp
         header_file,
         header_size
       ].join(" ")
+
+      'http://localhost:1225?' + {
+        in: @source.to_s,
+        out: @outfile,
+        paper_format: format,
+        zoom_factor: zoom,
+        margin: margin,
+        orientation: orientation,
+        cookie_file: cookie_file,
+        rendering_time: rendering_time,
+        timeout: timeout,
+        viewport_width: viewport_width,
+        viewport_height: viewport_height,
+        max_redirect_count: max_redirect_count,
+        footer_file: footer_file,
+        footer_size: footer_size,
+        header_file: header_file,
+        header_size: header_size
+      }.map { |k,v| "#{k}=#{v}" }.join('&')
     end
 
     # Public: initializes a new Phantom Object
@@ -106,7 +140,7 @@ module Shrimp
       @options = Shrimp.configuration.default_options.merge(options)
       @cookies = cookies
       @outfile = File.expand_path(outfile) if outfile
-      raise NoExecutableError.new unless File.exists?(Shrimp.configuration.phantomjs)
+      # raise NoExecutableError.new unless File.exists?(Shrimp.configuration.phantomjs)
     end
 
     # Public: renders to pdf
