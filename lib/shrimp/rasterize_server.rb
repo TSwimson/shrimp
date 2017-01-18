@@ -1,4 +1,30 @@
 #  command_config_file  = "--config=#{options[:command_config_file]}"
+# if pid file present
+#   if pid file reads restarting
+#      if trys < 4
+#        increment trys
+#        wait a third of a second
+#        back to top
+#      else
+#        start the server
+#        do the checks
+#        write the pid
+#      end
+#   else if pid is running && if can get status
+#     already started
+#     return success
+#   else
+#     write restarting to pidfile
+#     try to kill the pid if there is one
+#     start the server
+#     do the checks
+#     write the pid
+#   end
+# else
+#  write resstarting
+#  start the server
+#  do the checks
+#  write the pid
 module Shrimp
   # start and manage a phantom rasterization server
   class RasterizeServer
@@ -14,17 +40,43 @@ module Shrimp
     end
 
     def initialize(options = {})
+      @trys = 0
       @options         = options
       @cmd_config_file = get_option(:command_config_file)
       @script_file     = get_option(:script_file)
+    end
 
-      if started?
-        puts 'Shrimp appears to already be running'
-      else
-        puts "started: #{start}"
+    def initial_setup
+      read_pid_from_file
+
+      if pid.nil? || pid == '' || (pid.to_i != 0 && !running?)
+        puts 'pid is blank or process is not running moving on to restart process'
+        begin
+          FileUtils.mkdir('shrimp_lock')
+        rescue
+          initial_setup
+          return
+        end
+        write_pid_to_file('restarting')
+        start
+        FileUtils.rmdir('shrimp_lock')
+        puts 'started'
+      elsif pid.to_i != 0 && running?
+        puts "read #{pid} from pidfile and its running :) nothing to do"
+      elsif pid.to_s.start_with?('restarting')
+        if @trys > 4
+          puts 'looks like it failed to restart, i\'ll try now'
+          @trys = 0
+          write_pid_to_file('')
+          FileUtils.rmdir('shrimp_lock')
+          initial_setup
+          return
+        end
+        puts "looks like its already restarting waiting for a 3rd of a second try: #{@trys}"
+        sleep(0.3)
+        @trys += 1
+        initial_setup
       end
-
-      @pid
     end
 
     def get_option(option)
@@ -34,31 +86,19 @@ module Shrimp
       )
     end
 
-    def started?
-      @pid = pid_from_file
-      return false unless pid
-      begin
-        Process.kill(0, pid.to_i)
-        true
-      rescue Errno::ESRCH
-        false
-      rescue Errno::EPERM
-        true
-      end
-    end
-
-    def pid_from_file
+    def read_pid_from_file
       @pidfile ||= get_option(:pid_file)
       begin
-        File.open(@pidfile, 'rb') { |file| file.read }
+        @pid = File.open(@pidfile, 'rb', &:read)
+        @pid = @pid.to_i if @pid.to_i != 0
       rescue Errno::ENOENT
         nil
       end
     end
 
-    def write_pid_to_file
+    def write_pid_to_file(pid = nil)
       @pidfile ||= get_option(:pid_file)
-      File.open(@pidfile, 'wb') { |file| file.write(@pid) }
+      File.open(@pidfile, 'wb') { |file| file.write(pid || @pid) }
     end
 
     def start
@@ -69,9 +109,12 @@ module Shrimp
 
       ret = @output.gets
       puts "got ret #{ret}"
+      if ret.start_with?('listening on port: ') && responding?
+        write_pid_to_file
+        return true
+      end
 
-      write_pid_to_file
-      return true if ret.start_with?('listening on port: ')
+      return false
     end
 
     def stop
@@ -84,7 +127,19 @@ module Shrimp
       @pid = nil
     end
 
-    def up?
+    def running?
+      return false unless pid && pid.to_i != 0
+      begin
+        Process.kill(0, pid.to_i)
+        true
+      rescue Errno::ESRCH
+        false
+      rescue Errno::EPERM
+        true
+      end
+    end
+
+    def responding?
       uri = URI('http://localhost:1225/status')
       http = Net::HTTP.new(uri.host, uri.port)
       http.read_timeout = 1
