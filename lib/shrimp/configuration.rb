@@ -1,6 +1,7 @@
 require 'tmpdir'
-
+# outomatically make pages respond with .pdf
 module Shrimp
+  # config for the rendering
   class Configuration
     attr_accessor :default_options
     attr_writer :phantomjs
@@ -17,32 +18,47 @@ module Shrimp
      :viewport_height,
      :max_redirect_count].each do |m|
       define_method("#{m}=") do |val|
-        @default_options[m]=val
+        @default_options[m] = val
       end
     end
 
     def initialize
       @default_options = {
-          :format               => 'A4',
-          :margin               => '1cm',
-          :zoom                 => 1,
-          :orientation          => 'portrait',
-          :tmpdir               => Dir.tmpdir,
-          :rendering_timeout    => 90000,
-          :rendering_time       => 1000,
-          :command_config_file  => File.expand_path('../config.json', __FILE__),
-          :viewport_width       => 600,
-          :viewport_height      => 600,
-          :max_redirect_count   => 0,
-          :header_content       => nil,
-          :footer_content       => nil,
-          :header_size          => '0cm',
-          :footer_size          => '0cm'
+        tmpdir:              Dir.tmpdir,
+        rendering_timeout:   100,
+        rendering_time:      50,
+        command_config_file: File.expand_path('../config.json', __FILE__),
+        viewport_width:      600,
+        viewport_height:     600,
+        max_redirect_count:  0,
+        script_file:          File.expand_path('../rasterize-server.js', __FILE__),
+        pid_file:             File.expand_path('../../../pidfile', __FILE__)
+      }.merge(default_header_footer_attributes).merge(default_paper_attributes)
+    end
+
+    def default_header_footer_attributes
+      {
+        header_content:      nil,
+        footer_content:      nil,
+        header_size:         '0cm',
+        footer_size:         '0cm'
+      }
+    end
+
+    def default_paper_attributes
+      {
+        format:              'A4',
+        margin:              '1cm',
+        zoom:                1,
+        orientation:         'portrait'
       }
     end
 
     def phantomjs
-      @phantomjs ||= (defined?(Bundler::GemfileError) ? `bundle exec which phantomjs` : `which phantomjs`).chomp
+      @phantomjs ||= (
+        (`bundle exec which phantomjs` if defined?(Bundler::GemfileError)) ||
+          `which phantomjs`
+      ).chomp
     end
   end
 

@@ -1,17 +1,18 @@
 require 'uri'
 module Shrimp
+  # wrapper for html source file, url or string
   class Source
     def initialize(url_or_file)
       @source = url_or_file
-      raise ImproperSourceError.new unless url? || file?
+      raise ImproperSourceError unless url? || file?
     end
 
     def url?
-      @source.is_a?(String) && @source.match(URI::regexp)
+      @source.is_a?(String) && @source.match(URI.regexp)
     end
 
     def file?
-      @source.kind_of?(File)
+      @source.is_a?(File)
     end
 
     def html?

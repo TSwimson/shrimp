@@ -1,5 +1,5 @@
 require 'shrimp/version'
 require 'shrimp/source'
-require 'shrimp/phantom'
-require 'shrimp/middleware'
 require 'shrimp/configuration'
+require 'shrimp/rasterize_server'
+require 'shrimp/rasterize_client'
