@@ -3,15 +3,6 @@ require 'json'
 require 'shellwords'
 # outomatically make pages respond with .pdf
 module Shrimp
-  # no executable found
-  class NoExecutableError < StandardError
-    def initialize
-      msg = "No phantomjs executable found at #{Shrimp.configuration.phantomjs}\n"
-      msg << '>> Please install phantomjs - http://phantomjs.org/download.html'
-      super(msg)
-    end
-  end
-
   # bad source
   class ImproperSourceError < StandardError
     def initialize(msg = nil)
@@ -37,16 +28,20 @@ module Shrimp
     # Returns the stdout output of phantomjs
     def run
       retrys = 0
-      # self.class.start_phantom
       uri = URI(request_string)
       http = Net::HTTP.new(uri.host, uri.port)
-      http.read_timeout = 5
+      http.open_timeout = 0.25
+      http.read_timeout = 1
+      puts 'about to send pdf request'
+      puts uri.request_uri
       begin
         http.get(uri.request_uri)
       rescue Timeout::Error, Errno::EINVAL, Errno::ECONNRESET, EOFError, Errno::ECONNREFUSED => e
-        raise e if retrys > 2
-        puts 'restarting shrimp server'
-        self.class.restart_phantom
+        raise e if retrys > 3
+        if retrys == 1
+          puts 'restarting shrimp server'
+          Shrimp.server.restart
+        end
         retrys += 1
         retry
       end
@@ -63,7 +58,7 @@ module Shrimp
 
     # Public: Returns the phantom rasterize command
     def request_string
-      'http://localhost:1225?' +
+      Shrimp.server.url + '?' +
         { in: @source.to_s, out: outfile }
         .merge(browser_attributes)
         .merge(paper_attributes)
@@ -114,10 +109,9 @@ module Shrimp
     # Returns self
     def initialize(url_or_file, options = {}, cookies = {}, outfile = nil)
       @source  = Source.new(url_or_file)
-      @options = Shrimp.configuration.default_options.merge(options)
+      @options = Shrimp.render_configuration.options.merge(options)
       @cookies = cookies
       @outfile = File.expand_path(outfile) if outfile
-      # raise NoExecutableError.new unless File.exists?(Shrimp.configuration.phantomjs)
     end
 
     # Public: renders to pdf

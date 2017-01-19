@@ -1,31 +1,12 @@
 #  command_config_file  = "--config=#{options[:command_config_file]}"
-# if pid file present
-#   if pid file reads restarting
-#      if trys < 4
-#        increment trys
-#        wait a third of a second
-#        back to top
-#      else
-#        start the server
-#        do the checks
-#        write the pid
-#      end
-#   else if pid is running && if can get status
-#     already started
-#     return success
-#   else
-#     write restarting to pidfile
-#     try to kill the pid if there is one
-#     start the server
-#     do the checks
-#     write the pid
-#   end
-# else
-#  write resstarting
-#  start the server
-#  do the checks
-#  write the pid
 module Shrimp
+  def self.server
+    return @server if @server
+    @server = RasterizeServer.new
+    @server.initial_setup
+    @server
+  end
+
   # start and manage a phantom rasterization server
   class RasterizeServer
     attr_reader :pid
@@ -40,65 +21,45 @@ module Shrimp
     end
 
     def initialize(options = {})
-      @trys = 0
+      @trys            = 0
       @options         = options
-      @cmd_config_file = get_option(:command_config_file)
-      @script_file     = get_option(:script_file)
     end
 
     def initial_setup
+      wait_for_lock_to_be_released
       read_pid_from_file
 
-      if pid.nil? || pid == '' || (pid.to_i != 0 && !running?)
-        puts 'pid is blank or process is not running moving on to restart process'
-        begin
-          FileUtils.mkdir('shrimp_lock')
-        rescue
-          initial_setup
-          return
-        end
-        write_pid_to_file('restarting')
+      if pid.zero? || !running? || !responding?
+        puts 'pid is blank or process is not running or not responding moving on to restart process'
+        return initial_setup unless acquire_lock
+        stop if running?
         start
-        FileUtils.rmdir('shrimp_lock')
+        release_lock
         puts 'started'
-      elsif pid.to_i != 0 && running?
-        puts "read #{pid} from pidfile and its running :) nothing to do"
-      elsif pid.to_s.start_with?('restarting')
-        if @trys > 4
-          puts 'looks like it failed to restart, i\'ll try now'
-          @trys = 0
-          write_pid_to_file('')
-          FileUtils.rmdir('shrimp_lock')
-          initial_setup
-          return
+      else
+        puts "read #{pid} from pidfile and its running and responding :) nothing to do"
+      end
+    end
+
+    def wait_for_lock_to_be_released(trys = 0)
+      if locked?
+        if trys >= get_option(:startup_timeout_trys)
+          puts 'looks like it failed to release the lock, deleting lock'
+          release_lock(true)
+        else
+          puts "looks like it's locked, waiting for #{get_option(:startup_timeout)} seconds, try: #{trys}/#{get_option(:startup_timeout_trys)}"
+          sleep(get_option(:startup_timeout))
+          wait_for_lock_to_be_released(trys + 1)
         end
-        puts "looks like its already restarting waiting for a 3rd of a second try: #{@trys}"
-        sleep(0.3)
-        @trys += 1
-        initial_setup
       end
     end
 
-    def get_option(option)
-      @options.fetch(
-        option,
-        Shrimp.configuration.default_options[option]
-      )
-    end
-
-    def read_pid_from_file
-      @pidfile ||= get_option(:pid_file)
-      begin
-        @pid = File.open(@pidfile, 'rb', &:read)
-        @pid = @pid.to_i if @pid.to_i != 0
-      rescue Errno::ENOENT
-        nil
-      end
-    end
-
-    def write_pid_to_file(pid = nil)
-      @pidfile ||= get_option(:pid_file)
-      File.open(@pidfile, 'wb') { |file| file.write(pid || @pid) }
+    def restart
+      wait_for_lock_to_be_released
+      return restart unless acquire_lock
+      stop if running?
+      start
+      release_lock
     end
 
     def start
@@ -106,20 +67,21 @@ module Shrimp
       cmd = start_cmd
       puts "Executing #{cmd}"
       @pid = Process.spawn(cmd, out: input)
-
+      Process.detach(@pid)
       ret = @output.gets
+      @output = nil
       puts "got ret #{ret}"
-      if ret.start_with?('listening on port: ') && responding?
+      sleep(0.1)
+      if ret.start_with?('listening on: ') && responding?
         write_pid_to_file
         return true
       end
 
+      stop
       return false
     end
 
     def stop
-      @output = nil
-      Process.detach(@pid)
       Process.kill(15, @pid)
     rescue Errno::ESRCH
       puts 'Error process was doesn\'t appear to be running'
@@ -128,7 +90,7 @@ module Shrimp
     end
 
     def running?
-      return false unless pid && pid.to_i != 0
+      return false unless pid && pid != 0
       begin
         Process.kill(0, pid.to_i)
         true
@@ -140,9 +102,10 @@ module Shrimp
     end
 
     def responding?
-      uri = URI('http://localhost:1225/status')
+      uri = URI("#{url}/status")
       http = Net::HTTP.new(uri.host, uri.port)
-      http.read_timeout = 1
+      http.read_timeout = get_option(:status_check_read_timeout)
+      http.open_timeout = get_option(:status_check_open_timeout)
       begin
         http.get(uri.request_uri)
       rescue Timeout::Error,
@@ -150,34 +113,78 @@ module Shrimp
              Errno::ECONNRESET,
              EOFError,
              Errno::ECONNREFUSED => e
-        puts "#{e}: #{e.message}"
+        puts "status check failed #{e}: #{e.message}"
         return false
       end
       true
     end
 
+    def url
+      "http://localhost:#{get_option(:port)}"
+    end
+
+    private
+
     def start_cmd
-      "phantomjs --config=#{@cmd_config_file} #{@script_file}"
+      "#{Shrimp.server_configuration.phantomjs} --config=#{get_option(:phantom_config_file)} #{get_option(:script_file)} #{get_option(:port)}"
+    end
+
+    def locked?
+      File.directory?(lock_path)
+    end
+
+    def lock_path
+      get_option(:lock_file)
+    end
+
+    def acquire_lock
+      FileUtils.mkdir(lock_path)
+      @acquired_lock = true
+      return true
+    rescue Errno::EEXIST
+      @acquired_lock = false
+      return false
+    end
+
+    def release_lock(force = false)
+      FileUtils.rmdir(lock_path) if force || @acquired_lock == true
+      @acquired_lock = false
+    end
+
+    def get_option(option)
+      @options.fetch(
+        option,
+        Shrimp.server_configuration.options[option]
+      )
+    end
+
+    def read_pid_from_file
+      @pidfile ||= get_option(:pid_file)
+      begin
+        @pid = File.open(@pidfile, 'rb', &:read).to_i
+      rescue Errno::ENOENT
+        @pid = 0
+      end
+    end
+
+    def write_pid_to_file(pid = nil)
+      @pidfile ||= get_option(:pid_file)
+      File.open(@pidfile, 'wb') { |file| file.write(pid || @pid) }
     end
 
     # recently moved
-    def self.restart_phantom
-      if @pid
-        begin
-          Process.kill('SIGTERM', @pid)
-        rescue
-          Errno::ESRCH
-        end
-        @pid = nil
-      end
-      puts "executing #{cmd}"
-      @pid = Process.spawn(cmd)
-      sleep(10)
-    end
-
-    def cmd
-      config_options = Shrimp.configuration.default_options[:command_config_file]
-      "phantomjs --config=#{config_options} #{Shrimp::Phantom::SCRIPT_FILE}"
-    end
+    # def self.restart_phantom
+    #   if @pid
+    #     begin
+    #       Process.kill('SIGTERM', @pid)
+    #     rescue
+    #       Errno::ESRCH
+    #     end
+    #     @pid = nil
+    #   end
+    #   puts "executing #{cmd}"
+    #   @pid = Process.spawn(cmd)
+    #   sleep(10)
+    # end
   end
 end
