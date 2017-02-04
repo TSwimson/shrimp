@@ -57,6 +57,5 @@ module Shrimp
 
   def self.configure_server
     yield(server_configuration)
-    # server
   end
 end
