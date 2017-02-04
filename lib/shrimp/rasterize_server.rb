@@ -71,7 +71,6 @@ module Shrimp
       ret = @output.gets
       @output = nil
       puts "got ret #{ret}"
-      sleep(0.1)
       if ret.start_with?('listening on: ') && responding?
         write_pid_to_file
         return true
@@ -82,6 +81,7 @@ module Shrimp
     end
 
     def stop
+      read_pid_from_file unless @pid
       Process.kill(15, @pid)
     rescue Errno::ESRCH
       puts 'Error process was doesn\'t appear to be running'

@@ -30,7 +30,7 @@ module Shrimp
       retrys = 0
       uri = URI(request_string)
       http = Net::HTTP.new(uri.host, uri.port)
-      http.open_timeout = 0.25
+      http.open_timeout = 1
       http.read_timeout = 1
       puts 'about to send pdf request'
       puts uri.request_uri

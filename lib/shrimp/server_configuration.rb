@@ -13,10 +13,10 @@ module Shrimp
           pid_file:                  File.expand_path('../../../pidfile', __FILE__),
           lock_file:                 File.expand_path('../../../lockfile', __FILE__),
           port:                      2225,
-          status_check_open_timeout: 0.25,
-          status_check_read_timeout: 0.25,
-          startup_timeout:           0.15,
-          startup_timeout_trys:      10
+          status_check_open_timeout: 1,
+          status_check_read_timeout: 1,
+          startup_timeout:           1,
+          startup_timeout_trys:      5
         }
       end
     end
